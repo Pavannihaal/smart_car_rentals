@@ -5,8 +5,16 @@
 
 -- ============================================
 -- FLEET BASELINES (computed once for all rules)
--- Each median is computed ONLY over vehicles with valid evidence for that metric.
--- Missing evidence = NULL = vehicle excluded from that baseline.
+-- What it does:
+-- - Calculates continuous 50th percentile (median) benchmarks across the active fleet for 6 key metrics:
+--   1) fleet_median_utilization: Median vehicle utilization rate.
+--   2) fleet_median_maintenance_downtime: Median maintenance downtime in days.
+--   3) fleet_median_maintenance_frequency: Median number of maintenance events.
+--   4) fleet_median_return_ready_days: Median turnaround days from returned to ready.
+--   5) fleet_median_inspection_issue_rate: Median ratio of inspection issues.
+--   6) fleet_median_paid_revenue: Median paid revenue per vehicle.
+-- - Filters: Evaluates only vehicles with an active observation window (observation_window_days > 0).
+-- - NULL semantics: Excludes NULLs using FILTER clauses so vehicles without evidence do not distort the median.
 -- ============================================
 WITH fleet_baselines AS (
     SELECT
@@ -26,6 +34,13 @@ WITH fleet_baselines AS (
     WHERE observation_window_days > 0
 ),
 
+-- ============================================
+-- BASELINE POPULATIONS
+-- What it does:
+-- - Counts the number of vehicles contributing valid (non-null) evidence to each baseline metric.
+-- - Provides the total vehicle count within the observation window.
+-- - Ensures statistical transparency into baseline sample sizes.
+-- ============================================
 baseline_populations AS (
     SELECT
         COUNT(*) FILTER (WHERE utilization IS NOT NULL) AS utilization_pop,
@@ -41,6 +56,12 @@ baseline_populations AS (
 
 -- ============================================
 -- R1: UNDERUTILIZED
+-- What it does:
+-- - Identifies vehicles whose utilization is significantly below expected fleet performance.
+-- - Trigger condition: Vehicle utilization is less than (fleet median utilization - 10 percentage points).
+-- - Severity: REVIEW.
+-- - Outputs: Canonical 32 columns including vehicle details, utilization metrics, threshold baselines,
+--   contextual observations, recommended business action, and data limitation notes.
 -- ============================================
 r1_underutilized AS (
     SELECT 
@@ -89,6 +110,12 @@ r1_underutilized AS (
 
 -- ============================================
 -- R2: MAINTENANCE_DOWNTIME
+-- What it does:
+-- - Identifies vehicles with excessive cumulative maintenance downtime during the observation window.
+-- - Trigger condition: Total maintenance downtime days > 1.5x fleet median maintenance downtime.
+-- - Severity: REVIEW.
+-- - Outputs: Canonical 32 columns with downtime thresholds, observations, and recommendations
+--   to review recurring repair causes and maintenance scheduling.
 -- ============================================
 r2_maintenance_downtime AS (
     SELECT 
@@ -137,6 +164,12 @@ r2_maintenance_downtime AS (
 
 -- ============================================
 -- R3: TURNAROUND_BOTTLENECK
+-- What it does:
+-- - Detects vehicles experiencing prolonged delays transitioning from 'RETURNED' to 'READY' status.
+-- - Trigger condition: Average return-to-ready days > 1.5x fleet median turnaround days,
+--   with at least 1 recorded return event (return_ready_count > 0).
+-- - Severity: REVIEW.
+-- - Outputs: Canonical 32 columns advising review of post-trip inspection, detailing, and maintenance handoffs.
 -- ============================================
 r3_turnaround_bottleneck AS (
     SELECT 
@@ -186,6 +219,12 @@ r3_turnaround_bottleneck AS (
 
 -- ============================================
 -- R4: REPEATED_INSPECTION_ISSUES
+-- What it does:
+-- - Detects vehicles with chronic physical or mechanical issues found during post-rental check-in.
+-- - Trigger condition: Inspection issue rate > 1.5x fleet median issue rate AND has at least 2 issue inspections
+--   (ensuring the pattern is recurring rather than an isolated incident).
+-- - Severity: REVIEW.
+-- - Outputs: Canonical 32 columns recommending inspection of recurring wear, body damage, or component failure.
 -- ============================================
 r4_repeated_inspection_issues AS (
     SELECT 
@@ -237,6 +276,12 @@ r4_repeated_inspection_issues AS (
 
 -- ============================================
 -- R5: HIGH_DEMAND_OPERATIONAL_RISK
+-- What it does:
+-- - Identifies high-value assets where strong rental demand intersects with high maintenance unreliability.
+-- - Trigger condition: Vehicle utilization >= fleet median AND maintenance downtime > 1.5x fleet median downtime.
+-- - Severity: HIGH_PRIORITY.
+-- - Outputs: Canonical 32 columns alerting management that high-demand vehicles are stuck in service bays,
+--   causing direct revenue loss and customer fulfillment risk.
 -- ============================================
 r5_high_demand_operational_risk AS (
     SELECT 
@@ -282,6 +327,12 @@ r5_high_demand_operational_risk AS (
 
 -- ============================================
 -- R6: DEMAND_SIDE_UNDERUTILIZATION
+-- What it does:
+-- - Differentiates commercial/marketing underperformance from mechanical/maintenance unavailability.
+-- - Trigger condition: Low utilization (< fleet median - 10%) BUT acceptable downtime (<= 1.5x fleet median).
+-- - Severity: INFO.
+-- - Outputs: Canonical 32 columns signaling that the vehicle is mechanically sound and available,
+--   so underutilization is driven by commercial factors (pricing, location, marketing, or vehicle appeal).
 -- ============================================
 r6_demand_side_underutilization AS (
     SELECT 
@@ -327,6 +378,12 @@ r6_demand_side_underutilization AS (
 
 -- ============================================
 -- R7: OPERATIONAL_UNDERPERFORMANCE
+-- What it does:
+-- - Flags severely underperforming assets suffering from both poor utilization and excessive downtime.
+-- - Trigger condition: Vehicle utilization < fleet median - 10% AND maintenance downtime > 1.5x fleet median.
+-- - Severity: HIGH_PRIORITY.
+-- - Outputs: Canonical 32 columns instructing operators to resolve mechanical downtime bottlenecks first
+--   before reallocating fleet or adjusting pricing.
 -- ============================================
 r7_operational_underperformance AS (
     SELECT 
@@ -372,6 +429,11 @@ r7_operational_underperformance AS (
 
 -- ============================================
 -- R8: HEALTHY_PERFORMER
+-- What it does:
+-- - Identifies top-performing, reliable fleet vehicles operating at healthy utilization with low downtime.
+-- - Trigger condition: Vehicle utilization >= fleet median AND maintenance downtime <= 1.5x fleet median.
+-- - Severity: INFO.
+-- - Outputs: Canonical 32 columns highlighting healthy operational performance to serve as fleet benchmarks.
 -- ============================================
 r8_healthy_performer AS (
     SELECT 
@@ -417,6 +479,11 @@ r8_healthy_performer AS (
 
 -- ============================================
 -- R9: RECURRING_MAINTENANCE
+-- What it does:
+-- - Identifies vehicles frequently taken out of service for repeated maintenance visits.
+-- - Trigger condition: Maintenance frequency >= 2 events AND maintenance frequency > fleet median frequency.
+-- - Severity: REVIEW.
+-- - Outputs: Canonical 32 columns recommending detailed review of maintenance history to detect repeat failures.
 -- ============================================
 r9_recurring_maintenance AS (
     SELECT 
@@ -462,6 +529,15 @@ r9_recurring_maintenance AS (
 
 -- ============================================
 -- R10: FLEET_EXPANSION_REVIEW
+-- What it does:
+-- - Category-level strategic decision-support query evaluating potential vehicle class expansion.
+-- - Sub-CTE 'cat_aggs': Aggregates metrics by vehicle type (category), computing category-level averages
+--   for utilization, maintenance frequency, and downtime days, plus vehicle count in each category.
+-- - Trigger condition: Category vehicle count >= 2, average utilization >= fleet median, and average
+--   maintenance downtime <= 1.5x fleet median downtime.
+-- - Severity: INFO.
+-- - Outputs: Canonical 32 columns (with vehicle-specific fields set to NULL) signaling high-performing
+--   vehicle categories that may warrant fleet capacity expansion if market conditions support it.
 -- ============================================
 r10_fleet_expansion_review AS (
     WITH cat_aggs AS (
@@ -519,6 +595,12 @@ r10_fleet_expansion_review AS (
 
 -- ============================================
 -- UNIFIED ADVISORY RECOMMENDATIONS OUTPUT
+-- What it does:
+-- - Consolidates all 10 rule CTEs (R1 through R10) into a single unified result set using UNION ALL.
+-- - Since every CTE outputs an identical 32-column canonical schema with matching data types,
+--   UNION ALL stacks the findings into a cohesive reporting table.
+-- - Sorting: Prioritizes recommendations by severity (1: HIGH_PRIORITY, 2: REVIEW, 3: INFO),
+--   then by rule_code alphabetically, and finally by vehicle_id.
 -- ============================================
 SELECT * FROM (
     SELECT * FROM r1_underutilized
