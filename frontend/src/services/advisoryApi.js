@@ -1,7 +1,11 @@
 const API_BASE = "http://localhost:4000";
 
 async function request(path) {
-  const response = await fetch(`${API_BASE}${path}`);
+  const session = JSON.parse(localStorage.getItem("smartcar_session") || "null");
+  const ownerId = session?.user_id || 9;
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: { "X-Owner-Id": String(ownerId) }
+  });
 
   if (response.status === 404) {
     const body = await response.json().catch(() => ({}));

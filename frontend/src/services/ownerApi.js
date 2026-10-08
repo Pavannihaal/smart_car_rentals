@@ -41,6 +41,12 @@ export const ownerApi = {
   getOperationalMetrics() {
     return getAdvisoryVehicleMetrics();
   },
+  getAnalytics() {
+    return request("/api/owner/analytics");
+  },
+  getStatusTransitions(vehicleId) {
+    return request(`/api/owner/analytics/status-transitions/${vehicleId}`);
+  },
   getBaselines() {
     return getAdvisoryBaselines();
   },
