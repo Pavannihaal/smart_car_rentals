@@ -14,6 +14,7 @@ function request(method, path) {
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: '127.0.0.1', port: 4000, path, method,
+      headers: path.startsWith('/api/advisory/') ? { 'x-owner-id': '9' } : {},
     }, (res) => {
       let body = '';
       res.on('data', (c) => (body += c));
@@ -38,19 +39,12 @@ async function main() {
       if (ok) pass++; else fail++;
       console.log(`${tag} ${ep.method} ${ep.path} -> ${r.status}`);
       if (ep.path === '/api/advisory/vehicle-metrics') {
-        const v6 = r.body.vehicle_metrics.find(v => v.vehicle_id === 6);
-        const v5 = r.body.vehicle_metrics.find(v => v.vehicle_id === 5);
-        const v1 = r.body.vehicle_metrics.find(v => v.vehicle_id === 1);
+        const rows = r.body.vehicle_metrics;
         const checks = [
-          ['V6 booking_count is "1"', v6.booking_count === '1'],
-          ['V6 rental_days non-null',  v6.rental_days !== null],
-          ['V6 utilization > 0.85',    Number(v6.utilization) > 0.85],
-          ['V5 maintenance_frequency is "1"', v5.maintenance_frequency === '1'],
-          ['V5 maintenance_cost non-null',    v5.maintenance_cost !== null],
-          ['V1 rental_days is null (no in-window bookings)', v1.rental_days === null],
-          ['V1 maintenance_cost is null (no records)', v1.maintenance_cost === null],
-          ['V1 booking_count is "0" (count metric)', v1.booking_count === '0'],
-          ['V1 total_inspections is "0" (count metric)', v1.total_inspections === '0'],
+          ['owner response contains only company 1 vehicles', rows.length === 4 && rows.every((v) => [1, 2, 3, 9].includes(Number(v.vehicle_id)))],
+          ['count metrics are non-null', rows.every((v) => v.booking_count !== null && v.total_inspections !== null)],
+          ['missing rental evidence remains NULL', rows.filter((v) => v.booking_count === '0').every((v) => v.rental_days === null && v.utilization === null)],
+          ['missing maintenance evidence remains NULL', rows.filter((v) => v.maintenance_frequency === '0').every((v) => v.maintenance_cost === null && v.maintenance_downtime_days === null)],
         ];
         for (const [name, ok] of checks) {
           if (ok) { pass++; console.log(`  PASS ${name}`); }
@@ -71,7 +65,7 @@ async function main() {
         const checks = [
           ['baselines has fleet_median_utilization (numeric)', typeof r.body.fleet_median_utilization === 'number'],
           ['baselines has fleet_median_return_ready_days (null OK)', r.body.fleet_median_return_ready_days === null || typeof r.body.fleet_median_return_ready_days === 'number'],
-          ['baselines has maintenance_frequency_pop (numeric string)', r.body.maintenance_frequency_pop === '10'],
+          ['baselines has company-scoped population', r.body.total_vehicles === '4'],
         ];
         for (const [name, ok] of checks) {
           if (ok) { pass++; console.log(`  PASS ${name}`); }

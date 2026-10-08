@@ -1,5 +1,6 @@
 const express = require('express');
 const { query, withClient } = require('../db/pool');
+const { fetchOwnerAnalytics, fetchStatusTransitions } = require('../services/ownerAnalyticsService');
 
 const router = express.Router();
 
@@ -32,6 +33,26 @@ async function getOwnerBooking(bookingId, companyId, client = { query }) {
   const result = await client.query('SELECT b.booking_id, b.vehicle_id, b.pickup_datetime, b.return_datetime, b.status, v.company_id FROM bookings b JOIN vehicles v ON v.vehicle_id = b.vehicle_id WHERE b.booking_id = $1 AND v.company_id = $2', [bookingId, companyId]);
   return result.rows[0] || null;
 }
+
+router.get('/analytics', async (req, res, next) => {
+  try {
+    const owner = await requireOwner(req, res);
+    if (!owner) return;
+    const analytics = await fetchOwnerAnalytics(owner.company_id);
+    res.json({ company: owner.company_name, ...analytics });
+  } catch (error) { next(error); }
+});
+
+router.get('/analytics/status-transitions/:vehicleId', async (req, res, next) => {
+  try {
+    const owner = await requireOwner(req, res);
+    if (!owner) return;
+    const vehicleId = Number(req.params.vehicleId);
+    if (!Number.isInteger(vehicleId) || vehicleId <= 0) return res.status(400).json({ error: 'invalid_vehicle_id', message: 'A valid vehicle ID is required.' });
+    const rows = await fetchStatusTransitions(owner.company_id, vehicleId);
+    res.json({ items: rows });
+  } catch (error) { next(error); }
+});
 
 router.get('/fleet', async (req, res, next) => {
   try {
@@ -223,10 +244,19 @@ router.get('/history', async (req, res, next) => {
     const conditions = ['v.company_id = $1'];
     if (req.query.vehicle_id) { values.push(Number(req.query.vehicle_id)); conditions.push(`v.vehicle_id = $${values.length}`); }
     const result = await query(
-      `SELECT h.history_id, h.vehicle_id, h.status, h.changed_at, h.comments,
-        v.brand, v.model, v.vehicle_number, v.type
-       FROM vehicle_status_history h JOIN vehicles v ON v.vehicle_id = h.vehicle_id
-       WHERE ${conditions.join(' AND ')} ORDER BY h.changed_at DESC`, values
+      `WITH ordered_history AS (
+        SELECT h.history_id, h.vehicle_id, h.status, h.changed_at, h.comments,
+          LAG(h.status) OVER (PARTITION BY h.vehicle_id ORDER BY h.changed_at, h.history_id) AS previous_status,
+          LEAD(h.status) OVER (PARTITION BY h.vehicle_id ORDER BY h.changed_at, h.history_id) AS next_status,
+          LEAD(h.changed_at) OVER (PARTITION BY h.vehicle_id ORDER BY h.changed_at, h.history_id) AS next_changed_at,
+          v.brand, v.model, v.vehicle_number, v.type
+        FROM vehicle_status_history h JOIN vehicles v ON v.vehicle_id = h.vehicle_id
+        WHERE ${conditions.join(' AND ')}
+      )
+      SELECT *, CASE WHEN next_changed_at IS NULL THEN NULL
+        ELSE EXTRACT(EPOCH FROM (next_changed_at - changed_at)) / 86400.0
+        END AS duration_in_status
+      FROM ordered_history ORDER BY changed_at DESC`, values
     );
     res.json({ items: result.rows.map((row) => ({ ...row, vehicle: { vehicle_id: row.vehicle_id, brand: row.brand, model: row.model, vehicle_number: row.vehicle_number, type: row.type } })) });
   } catch (error) { next(error); }

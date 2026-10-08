@@ -5,6 +5,7 @@ import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge, Toast } 
 import { fallbackVehicleImage, getVehicleImage } from "../data/vehicleImages";
 import { ownerApi } from "../services/ownerApi";
 import { getCurrentSessionUser } from "../data/users";
+import { OwnerAdvancedAnalytics } from "../components/OwnerAdvancedAnalytics";
 
 const availableStatuses = ["AVAILABLE", "READY", "RETURNED"];
 const inspectionStatuses = ["INSPECTION", "CLEANING"];
@@ -219,30 +220,14 @@ export function OwnerHistoryPage() {
   const allItems = state.data?.items || [];
   const items = allItems.filter((item) => !status || item.status === status);
   const statuses = [...new Set(allItems.map((item) => item.status))];
-  return <div className="stack-page"><PageHeader eyebrow="Vehicle History" title={vehicleId ? "Vehicle lifecycle timeline" : "Fleet lifecycle timeline"} description="Chronological status transitions recorded by the existing vehicle history table." actions={<Link className="secondary-button" to="/owner/fleet">Back to fleet</Link>} /><section className="owner-filters"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All event types</option>{statuses.map((item) => <option key={item} value={item}>{item}</option>)}</select></section>{items.length ? <section className="timeline-list">{items.map((item) => <article className="card timeline-item" key={item.history_id}><div className="timeline-marker"><StatusBadge status={item.status} /></div><div><div className="split-line"><VehicleReference vehicle={item.vehicle} /><time>{dateTime(item.changed_at)}</time></div><p>{item.comments || "No transition comment recorded."}</p></div></article>)}</section> : <EmptyState title="No history events found" description="No real lifecycle events match the selected vehicle and event filter." />}</div>;
-}
-
-function analyticsNumber(value) {
-  return value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
-}
-
-function analyticsPercent(value) {
-  const number = analyticsNumber(value);
-  return number === null ? "—" : `${(number * 100).toFixed(1)}%`;
-}
-
-function analyticsAverage(rows, field) {
-  const values = rows.map((row) => analyticsNumber(row[field])).filter((value) => value !== null);
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-}
-
-function AnalyticsMetric({ label, value, detail }) {
-  return <article className="card analytics-metric"><p className="eyebrow">{label}</p><h3>{value}</h3><p>{detail}</p></article>;
+  return <div className="stack-page"><PageHeader eyebrow="Vehicle History" title={vehicleId ? "Vehicle lifecycle timeline" : "Fleet lifecycle timeline"} description="Chronological status transitions recorded by the existing vehicle history table." actions={<Link className="secondary-button" to="/owner/fleet">Back to fleet</Link>} /><section className="owner-filters"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All event types</option>{statuses.map((item) => <option key={item} value={item}>{item}</option>)}</select></section>{items.length ? <section className="timeline-list">{items.map((item) => <article className="card timeline-item" key={item.history_id}><div className="timeline-marker"><StatusBadge status={item.status} /></div><div><div className="split-line"><VehicleReference vehicle={item.vehicle} /><time>{dateTime(item.changed_at)}</time></div><p>{item.comments || "No transition comment recorded."}</p><small>{item.previous_status || "Initial"} to {item.status} / {item.duration_in_status === null ? "Ongoing" : `${Number(item.duration_in_status).toFixed(2)} days`}</small></div></article>)}</section> : <EmptyState title="No history events found" description="No real lifecycle events match the selected vehicle and event filter." />}</div>;
 }
 
 export function OwnerAnalyticsPage() {
-  const state = useOwnerResource(() => Promise.all([ownerApi.getFleet(), ownerApi.getOperationalMetrics()]).then(([fleet, metrics]) => ({ fleet: fleet.items || [], metrics: metrics.vehicle_metrics || [] })), []);
-  if (state.loading) return <div className="stack-page"><LoadingState title="Loading fleet analytics" description="Reading measured rental, maintenance, inspection, and revenue evidence." /></div>;
+  return <OwnerAdvancedAnalytics />;
+  /* Legacy analytics implementation retained below only as migration reference.
+   const state = useOwnerResource(() => Promise.all([ownerApi.getFleet(), ownerApi.getOperationalMetrics()]).then(([fleet, metrics]) => ({ fleet: fleet.items || [], metrics: metrics.vehicle_metrics || [] })), []);
+   if (state.loading) return <div className="stack-page"><LoadingState title="Loading fleet analytics" description="Reading measured rental, maintenance, inspection, and revenue evidence." /></div>;
   if (state.error) return <div className="stack-page"><ErrorState title="Analytics unavailable" description={state.error} /></div>;
   const fleet = state.data?.fleet || [];
   const fleetIds = new Set(fleet.map((vehicle) => vehicle.vehicle_id));
@@ -261,7 +246,9 @@ export function OwnerAnalyticsPage() {
   const totalRentalDays = rows.reduce((sum, row) => sum + (analyticsNumber(row.rental_days) || 0), 0);
   const totalRevenue = withRevenue.reduce((sum, row) => sum + (analyticsNumber(row.paid_revenue) || 0), 0);
   return <div className="stack-page analytics-page"><PageHeader eyebrow="Owner Analytics" title="What the fleet data shows" description="Measured operational evidence from this owner fleet. Missing evidence remains unavailable rather than being treated as zero." /><section className="grid-four"><AnalyticsMetric label="Fleet vehicles" value={fleet.length} detail="Current company fleet records" /><AnalyticsMetric label="Rental evidence" value={`${withUtilization.length} / ${fleet.length}`} detail="Vehicles with measured utilization" /><AnalyticsMetric label="Booking activity" value={totalBookings} detail={`${totalRentalDays.toFixed(1)} measured rental days`} /><AnalyticsMetric label="Paid revenue" value={withRevenue.length ? money(totalRevenue) : "—"} detail={`${withRevenue.length} vehicles with revenue evidence`} /></section><section className="analytics-section"><div className="section-head-split"><div><p className="eyebrow">Utilization / rental activity</p><h3>How much of the measured fleet is being used?</h3></div><span className="analytics-note">{withUtilization.length} of {fleet.length} vehicles have evidence</span></div><div className="analytics-bars">{rows.map((row) => <div className="analytics-bar-row" key={row.vehicle_id}><span>{row.brand} {row.model}</span><div className="analytics-bar-track"><div className="analytics-bar-fill" style={{ width: `${Math.max(0, Math.min(100, (analyticsNumber(row.utilization) || 0) * 100))}%` }} /></div><strong>{analyticsPercent(row.utilization)}</strong></div>)}</div><p className="analytics-note">A blank bar represents no measured utilization evidence, not zero utilization.</p></section><section className="analytics-grid-two"><section className="analytics-section"><div className="section-head-split"><div><p className="eyebrow">Current status distribution</p><h3>Where vehicles are in the lifecycle</h3></div></div><div className="analytics-status-list">{Object.entries(counts).map(([status, count]) => <div className="analytics-status-row" key={status}><StatusBadge status={status} /><strong>{count}</strong><span>{fleet.length ? `${((count / fleet.length) * 100).toFixed(0)}% of fleet` : "—"}</span></div>)}</div></section><section className="analytics-section"><div className="section-head-split"><div><p className="eyebrow">Maintenance evidence</p><h3>Service burden with recorded data</h3></div></div><div className="analytics-evidence-list"><div><span>Vehicles with downtime</span><strong>{withDowntime.length} / {fleet.length}</strong></div><div><span>Average downtime</span><strong>{analyticsNumber(analyticsAverage(withDowntime, "maintenance_downtime_days")) === null ? "—" : `${analyticsAverage(withDowntime, "maintenance_downtime_days").toFixed(2)} days`}</strong></div><div><span>Vehicles with maintenance cost</span><strong>{rows.filter((row) => analyticsNumber(row.maintenance_cost) !== null).length} / {fleet.length}</strong></div><div><span>Average inspection issue rate</span><strong>{analyticsPercent(analyticsAverage(rows, "inspection_issue_rate"))}</strong></div></div></section></section><section className="analytics-section"><div className="section-head-split"><div><p className="eyebrow">Vehicle category comparison</p><h3>How categories compare on measured activity</h3></div></div>{categoryRows.length ? <div className="card table-card table-scroll"><table><thead><tr><th>Category</th><th>Vehicles</th><th>Bookings</th><th>Avg utilization</th><th>Avg downtime</th><th>Paid revenue</th></tr></thead><tbody>{categoryRows.map((row) => <tr key={row.category}><td>{row.category}</td><td>{row.vehicles}</td><td>{row.bookings}</td><td>{analyticsPercent(row.utilization)}</td><td>{row.downtime === null ? "—" : `${row.downtime.toFixed(2)} days`}</td><td>{row.revenue ? money(row.revenue) : "—"}</td></tr>)}</tbody></table></div> : <EmptyState title="No category data" description="The current fleet has no category records to compare." />}</section></div>;
+  */
 }
+
 export function OwnerAdvisoryPage() { return <AdvisoryDashboard />; }
 export function OwnerReportsPage() {
   const state = useOwnerResource(() => Promise.all([

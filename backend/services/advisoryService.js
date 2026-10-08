@@ -6,39 +6,67 @@ const VIEWS_FILE = path.join(__dirname, '..', '..', 'database', 'advisory_views.
 const RULES_FILE = path.join(__dirname, '..', '..', 'database', 'advisory_rules.sql');
 
 let initialized = false;
+let initializationPromise = null;
 
 async function ensureViews() {
   if (initialized) return;
-  const sql = fs.readFileSync(VIEWS_FILE, 'utf8');
-  await withClient(async (client) => {
-    await client.query(sql);
-  });
-  initialized = true;
+  if (!initializationPromise) {
+    initializationPromise = (async () => {
+      const sql = fs.readFileSync(VIEWS_FILE, 'utf8');
+      await withClient(async (client) => {
+        await client.query(sql);
+      });
+      initialized = true;
+    })().finally(() => {
+      initializationPromise = null;
+    });
+  }
+  await initializationPromise;
 }
 
-async function fetchRecommendations() {
+async function scopeMetrics(client, companyId) {
+  await client.query(`
+    CREATE TEMP TABLE advisory_vehicle_metrics ON COMMIT DROP AS
+    SELECT m.*
+    FROM public.advisory_vehicle_metrics m
+    JOIN public.vehicles v ON v.vehicle_id = m.vehicle_id
+    WHERE v.company_id = $1
+  `, [companyId]);
+}
+
+async function fetchRecommendations(companyId) {
   await ensureViews();
   const sql = fs.readFileSync(RULES_FILE, 'utf8');
   return withClient(async (client) => {
+    await scopeMetrics(client, companyId);
     const r = await client.query(sql);
     return r.rows;
   });
 }
 
-async function fetchVehicleMetrics() {
+async function fetchVehicleMetrics(companyId) {
   await ensureViews();
   return withClient(async (client) => {
-    const r = await client.query('SELECT * FROM advisory_vehicle_metrics ORDER BY vehicle_id');
+    const r = await client.query(`
+      SELECT m.*
+      FROM public.advisory_vehicle_metrics m
+      JOIN public.vehicles v ON v.vehicle_id = m.vehicle_id
+      WHERE v.company_id = $1
+      ORDER BY m.vehicle_id
+    `, [companyId]);
     return r.rows;
   });
 }
 
-async function fetchBaselines() {
+async function fetchBaselines(companyId) {
   await ensureViews();
   return withClient(async (client) => {
     const r = await client.query(`
       WITH base AS (
-        SELECT * FROM advisory_vehicle_metrics WHERE observation_window_days > 0
+        SELECT m.*
+        FROM public.advisory_vehicle_metrics m
+        JOIN public.vehicles v ON v.vehicle_id = m.vehicle_id
+        WHERE v.company_id = $1 AND m.observation_window_days > 0
       )
       SELECT
         (SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY utilization)
@@ -60,7 +88,7 @@ async function fetchBaselines() {
         (SELECT COUNT(*) FROM base WHERE inspection_issue_rate IS NOT NULL) AS inspection_issue_pop,
         (SELECT COUNT(*) FROM base WHERE paid_revenue IS NOT NULL) AS revenue_pop,
         (SELECT COUNT(*) FROM base) AS total_vehicles
-    `);
+    `, [companyId]);
     return r.rows[0];
   });
 }
